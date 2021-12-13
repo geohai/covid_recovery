@@ -1,0 +1,264 @@
+## -------------------------------------------------------------------------------------------
+# install packages
+library(tidycensus)
+library(tidyverse)
+library(tigris)
+
+# set trigris options
+options(tigris_class="sf")
+options(tigris_use_cache = T)
+
+
+## -------------------------------------------------------------------------------------------
+# replace my census API key with your own census API key
+# instructions to download:
+census_api_key("c9dfbfcf8b82d02d96deb6d4a138f8e5e6e54050")
+
+
+## -------------------------------------------------------------------------------------------
+# for table names: https://censusreporter.org/topics/
+# change from MD for other states
+
+## MEDIAN INCOME
+balt_med_inc = 83160
+
+# get income for all tracts in STATE
+balt_tract_inc = get_acs(geography = "tract",
+                         variables = "B19013_001",
+                         state = "MD",
+                         year = 2019,
+                         geometry = FALSE,
+                         output = "tidy")
+
+# create above/below median income variable
+balt_tract_inc = balt_tract_inc %>%
+  separate(NAME, c("tract","county","state"), sep = ",") %>%
+  separate(tract, c(NA,NA,"tract_num"), sep = " ") %>%
+  mutate(median_hhincome = estimate) %>%
+  mutate(above_median_income = ifelse(median_hhincome > balt_med_inc, 1, 0))
+
+# note -- can be same tract_num with different GEOID
+# balt_tract_inc %>% filter(tract_num == 1)
+
+## RACE
+
+# create a list of census race variables (within summary table)
+race_vars = c(
+  White = "B03002_003",
+  Black = "B03002_004",
+  Hispanic = "B03002_012"
+)
+
+# get race variables (and summary table) for STATE
+balt_tract_race = get_acs(geography = "tract",
+                          state = "MD",
+                          variables = race_vars,
+                          summary_var = "B03002_001",
+                          year = 2019,
+                          geometry = FALSE,
+                          output = "tidy")
+
+# format race variables -- create pct vars and then group by geoid to eliminate redundant rows
+balt_tract_race = balt_tract_race %>%
+  separate(NAME, c("tract","county","state"), sep = ",") %>%
+  separate(tract, c(NA,NA,"tract_num"), sep = " ") %>%
+  spread(variable, estimate, fill=FALSE) %>%
+  mutate(pct_white = White/summary_est * 100) %>%
+  mutate(pct_black = Black/summary_est * 100) %>%
+  mutate(pct_hispanic = Hispanic/summary_est * 100) %>%
+  select(-White, -Black, -Hispanic) %>%
+  group_by(GEOID) %>%
+  summarize(pct_white = sum(pct_white), pct_black = sum(pct_black), pct_hispanic = sum(pct_hispanic))
+
+balt_tract_race
+
+
+## EDUCATION
+
+# create a list of census edu variables (within summary table)
+# https://www.socialexplorer.com/data/ACS2016_5yr/metadata/?ds=ACS16_5yr&table=B15003
+# Less than high school graduate
+# High school graduate (includes equivalency)
+# Some college or associate's degree
+# Bachelor's degree or higher 
+edu_vars = c(
+  no_school = "B15003_002",
+  nursery_school = "B15003_003",
+  K = "B15003_004",
+  G1 = "B15003_005",
+  G2 = "B15003_006",
+  G3 = "B15003_007",
+  G4 = "B15003_008",
+  G5 = "B15003_009",
+  G6 = "B15003_010",
+  G7 = "B15003_011",
+  G8 = "B15003_012",
+  G9 = "B15003_013",
+  G10 = "B15003_014",
+  G11 = "B15003_015",
+  G12_no_dip = "B15003_016",
+  hs_dip = "B15003_017",
+  ged = "B15003_018",
+  some_col1 = "B15003_019",
+  some_col2 = "B15003_020",
+  assoc = "B15003_021",
+  ba = "B15003_022",
+  ma = "B15003_023",
+  p_ma = "B15003_024",
+  phd = "B15003_025"
+)
+
+
+balt_tract_edu = get_acs(geography = "tract",
+                         state = "MD",
+                         variables = edu_vars,
+                         summary_var = "B15003_001",
+                         year = 2019,
+                         geometry = FALSE,
+                         output = "tidy")
+
+# create edu categories and make pcts
+balt_tract_edu = balt_tract_edu %>%
+  separate(NAME, c("tract","county","state"), sep = ",") %>%
+  separate(tract, c(NA,NA,"tract_num"), sep = " ") %>%
+  spread(variable, estimate, fill=FALSE) %>% 
+  group_by(GEOID) %>%
+  mutate(pct_less_than_hs = ((sum(c_across(cols = c("no_school","nursery_school","K","G1","G2","G3","G4",
+                              "G5","G6","G7","G8","G9","G10","G11","G12_no_dip"))))/summary_est)*100) %>%
+  mutate(pct_hs = ((sum(c_across(cols = c("hs_dip","ged"))))/summary_est)*100) %>%
+  mutate(pct_some_college = ((sum(c_across(cols = c("some_col1","some_col2"))))/summary_est)*100) %>%
+  mutate(pct_BAplus = ((sum(c_across(cols = c("ba","ma","p_ma","phd"))))/summary_est)*100) %>%
+  select(GEOID,tract_num,pct_less_than_hs,pct_hs,pct_some_college,pct_BAplus)
+
+balt_tract_edu = balt_tract_edu %>% distinct()
+
+
+balt_tract_edu
+
+## -------------------------------------------------------------------------------------------
+## join all census tract data together, select important columns
+merged_census = merge(balt_tract_inc, balt_tract_race, by="GEOID") %>%
+  merge(balt_tract_edu, by="GEOID") %>%
+  select(GEOID,tract_num.x,above_median_income,pct_white,pct_black,pct_hispanic,pct_less_than_hs,
+         pct_hs,pct_some_college,pct_BAplus) %>%
+  rename(tract_num = tract_num.x)
+
+merged_census
+
+
+## -------------------------------------------------------------------------------------------
+# Use income as a dummy variable to get Census block geography
+blocks = get_acs(geography = "block group",
+                 variables = "B19013_001",
+                 state = "MD",
+                 year = 2019,
+                 geometry = TRUE,
+                 output = "tidy"
+)
+
+# clean up columns to create tract_number ID, filter out all columns except for GEOID (same as cbg) and tract for merge
+blocks_parsed = blocks %>%
+  separate(NAME, c("block","tract","county","state"), sep = ",") %>%
+  separate(tract, c(NA,NA,NA,"tract_num"), sep = " ") %>%
+  separate(block, c(NA,NA,"block_num"), sep = " ") %>%
+  mutate(tract_block = substring(GEOID,6)) %>%
+  select(GEOID,tract_num)
+
+
+
+## -------------------------------------------------------------------------------------------
+# read safegraph data -- change file for each MSA
+msa = read.csv("/Users/esrieves/Documents/school/Research/foot_traffic/data/Outputs/normalized_output_data/Baltimore_MSA_18to21_visitor_flows/part-00000-b7cd33cb-8346-4867-9e74-370306776fc4-c000.csv")
+
+# change sender_cbg to be called GEOID to facilitate merge with census data
+msa = msa %>%
+  rename(GEOID = sender_cbg,
+         # named wrong in the other script, changing to reduce confusion
+         monthly_visitors_per_naics_cbg_NORMALIZED = monthly_visitors_per_naics_tracts_NORMALIZED)
+
+msa
+
+
+## -------------------------------------------------------------------------------------------
+# merge MSA Census data (dummy) with Safegraph to get the tract number for each block group
+MSA_census = merge(msa,blocks_parsed, by="GEOID")
+
+# select necessary columns and aggregate visitors from block to tract level
+# keep geoid for merge with income data
+MSA_census = MSA_census %>%
+  select(date_start, naics, monthly_visitors_per_naics_cbg_NORMALIZED,tract_num,GEOID) %>%
+  group_by(tract_num,date_start,naics) %>%
+  summarise(visitors = sum(monthly_visitors_per_naics_cbg_NORMALIZED),GEOID = GEOID)
+
+# preview data
+MSA_census
+
+# check to make sure that tract number makes sense
+# while these tract numbers seemed strange, they are listed in the "blocks" df above, indicating that they are valid tract names
+MSA_census %>% distinct(tract_num)
+
+
+## -------------------------------------------------------------------------------------------
+# code to determine if tract is in a MSA
+
+# Retrieve census tracts in STATE with the selected variable (total pop in this case)
+# variable = dummy variable
+
+# replace "md" with other state codes as needed
+md_tracts = get_acs(geography = "tract", year = 2019, variables = "B01001_001", state = "md",
+                    geometry = TRUE)
+
+# replace "Baltimore" for other MSAs
+msa = core_based_statistical_areas(cb = T) %>%
+  filter(str_detect(NAME, "Baltimore"))
+
+# retrieve census tracts in STATE that fall within the MSA
+msa_tracts = md_tracts[msa,]
+
+# make MSA tracts into a list with just tract names
+msa_tract_list = msa_tracts %>%
+  separate(NAME, c("tract","county","state"), sep = ",") %>%
+  separate(tract, c(NA,NA,"tract_num"), sep = " ") %>%
+  select(GEOID) %>%
+  as.list()
+
+#msa_tract_list
+
+
+## -------------------------------------------------------------------------------------------
+# create a df of safegraph tracts (distinct removes duplicates)
+safegraph_tracts = MSA_census$GEOID %>% as.data.frame() %>% distinct() %>% rename(GEOID = ".")
+
+# creates is_in_MSA column 
+safegraph_tracts = safegraph_tracts %>%
+  mutate(is_in_MSA = ifelse(unlist(safegraph_tracts) %in% unlist(msa_tract_list),1,0))
+
+# preview data
+safegraph_tracts
+
+# join census MSA with "is_in_MSA" data
+MSA_census_joined = merge(MSA_census,safegraph_tracts,by="GEOID")
+
+
+MSA_census_joined %>% 
+  group_by(is_in_MSA) %>%
+  summarize(n_MSA = n())
+
+
+## -------------------------------------------------------------------------------------------
+## ADD INCOME
+# drop the block number digit from GEOID column to match up with census tract variables
+MSA_census_joined$GEOID = substr(MSA_census_joined$GEOID,1,11)
+
+# merge MSA data with Census income data
+full_MSA = merge(MSA_census_joined, merged_census, by="GEOID")
+
+# clean full_MSA dataset
+full_MSA = full_MSA %>%
+  select(-tract_num.y) %>%
+  rename(tract_num = tract_num.x) %>%
+  group_by(GEOID,date_start,naics)
+
+
+full_MSA
+
