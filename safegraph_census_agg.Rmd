@@ -181,7 +181,7 @@ blocks_parsed = blocks %>%
 ## Read in Safegraph data and merge to get tract number for each cbg
 ```{r}
 # read safegraph data -- change file for each MSA
-msa = read.csv("/Users/esrieves/Documents/school/Research/foot_traffic/data/Outputs/normalized_output_data/Baltimore_MSA_18to21_visitor_flows/part-00000-b7cd33cb-8346-4867-9e74-370306776fc4-c000.csv")
+msa = read.csv("/Users/esrieves/Documents/school/Research/foot_traffic/data/Outputs/normalized_output_data/Baltimore_MSA_18to21_visitor_flows/part-00000-f2026452-40bb-4ef7-8ba2-b9abfa636ac5-c000.csv")
 
 # change sender_cbg to be called GEOID to facilitate merge with census data
 msa = msa %>%
@@ -191,6 +191,22 @@ msa = msa %>%
 
 msa
 ```
+```{r}
+summary(msa)
+
+msa %>% 
+  group_by(GEOID) %>%
+  summarise(n_cbg = n())
+
+msa %>%
+  group_by(GEOID) %>%
+  summarise_all(~sum(is.na(.)))
+
+# some CBGs are from other states (like Alabama).. I think that this might somehow lead to NAs for these same CBGs later.
+
+# Also it points to the fact that Census data should be pulled in for all states in case of this same issue.
+```
+
 
 ```{r}
 # merge MSA Census data (dummy) with Safegraph to get the tract number for each block group
@@ -211,7 +227,7 @@ MSA_census
 MSA_census %>% distinct(tract_num)
 ```
 
-## tracts are in MSA
+## Determine if tracts are in MSA
 ```{r}
 # code to determine if tract is in a MSA
 
@@ -277,6 +293,20 @@ full_MSA = full_MSA %>%
 
 full_MSA
 ```
+# Descriptive stats of Safegraph-Census dataset
+```{r}
+summary(full_MSA)
 
+# NAs for NAICS could be due to empty CBG phenomenon noticed above
+# Census variable NAs likely related to CBG/tract out of state discovered above
+```
+
+
+# Transform to .R script
+```{r}
+library(knitr)
+
+purl("safegraph_census_agg.Rmd")
+```
 
 
